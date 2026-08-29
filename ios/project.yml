@@ -1,0 +1,67 @@
+# XcodeGen project definition. On a Mac:
+#   brew install xcodegen && cd ios && xcodegen generate
+# then open Ghost.xcodeproj. See ios/README.md for the full setup checklist.
+name: Ghost
+options:
+  bundleIdPrefix: com.ghostvpn
+  deploymentTarget:
+    iOS: "17.0"
+  developmentLanguage: en
+
+packages:
+  WireGuardKit:
+    url: https://github.com/WireGuard/wireguard-apple
+    branch: master
+
+settings:
+  base:
+    SWIFT_VERSION: "5.9"
+    # Set your Apple Developer team to enable automatic signing:
+    # DEVELOPMENT_TEAM: XXXXXXXXXX
+    CODE_SIGN_STYLE: Automatic
+
+targets:
+  Ghost:
+    type: application
+    platform: iOS
+    sources:
+      - Ghost
+    dependencies:
+      - target: PacketTunnel
+        embed: true
+        codeSign: true
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.ghostvpn.ios
+        CODE_SIGN_ENTITLEMENTS: Ghost/Ghost.entitlements
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        INFOPLIST_KEY_UIUserInterfaceStyle: Dark
+        INFOPLIST_KEY_UISupportedInterfaceOrientations: UIInterfaceOrientationPortrait
+        # Local dev only: allows plain-HTTP calls to a ghostd on localhost.
+        # Remove before shipping; production uses HTTPS.
+        INFOPLIST_KEY_NSAppTransportSecurity_NSAllowsLocalNetworking: YES
+    info:
+      path: Ghost/Info.plist
+      properties:
+        CFBundleDisplayName: Ghost
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
+
+  PacketTunnel:
+    type: app-extension
+    platform: iOS
+    sources:
+      - PacketTunnel
+    dependencies:
+      - package: WireGuardKit
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.ghostvpn.ios.PacketTunnel
+        CODE_SIGN_ENTITLEMENTS: PacketTunnel/PacketTunnel.entitlements
+    info:
+      path: PacketTunnel/Info.plist
+      properties:
+        CFBundleDisplayName: Ghost Tunnel
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.networkextension.packet-tunnel
+          NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).PacketTunnelProvider
