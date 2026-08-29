@@ -3,12 +3,15 @@ import Foundation
 enum APIError: LocalizedError {
     case http(Int, String)
     case unauthorized
+    /// The server answered 402: this feature needs Ghost Plus.
+    case upgradeRequired(String)
     case network(Error)
 
     var errorDescription: String? {
         switch self {
         case let .http(_, message): return message
         case .unauthorized: return "Session expired — please sign in again."
+        case let .upgradeRequired(message): return message
         case let .network(err): return err.localizedDescription
         }
     }
@@ -65,6 +68,72 @@ actor APIClient {
         _ = try await send(path: "/v1/devices/\(id)", method: "DELETE", body: nil, authorized: true) as Data
     }
 
+    // MARK: Free tier — DNS filtering & dedicated IP
+
+    func dnsFilter() async throws -> DNSFilter {
+        try await get("/v1/dns-filter")
+    }
+
+    func setDNSFilter(ads: Bool, malware: Bool, trackers: Bool) async throws -> DNSFilter {
+        let payload = try JSONEncoder().encode([
+            "block_ads": ads, "block_malware": malware, "block_trackers": trackers,
+        ])
+        let data = try await send(path: "/v1/dns-filter", method: "PUT", body: payload, authorized: true)
+        return try JSONDecoder().decode(DNSFilter.self, from: data)
+    }
+
+    private struct DedicatedIPWrapper: Codable {
+        let dedicatedIP: DedicatedIP?
+        enum CodingKeys: String, CodingKey { case dedicatedIP = "dedicated_ip" }
+    }
+
+    func dedicatedIP() async throws -> DedicatedIP? {
+        let w: DedicatedIPWrapper = try await get("/v1/dedicated-ip")
+        return w.dedicatedIP
+    }
+
+    func allocateDedicatedIP(serverID: String) async throws -> DedicatedIP? {
+        let w: DedicatedIPWrapper = try await post("/v1/dedicated-ip", body: ["server_id": serverID], authorized: true)
+        return w.dedicatedIP
+    }
+
+    func releaseDedicatedIP() async throws {
+        _ = try await send(path: "/v1/dedicated-ip", method: "DELETE", body: nil, authorized: true)
+    }
+
+    // MARK: Paid tier — multi-hop chain & panic wipe
+
+    private struct ChainWrapper: Codable { let chain: [String]? }
+
+    func multiHopChain() async throws -> [String] {
+        let w: ChainWrapper = try await get("/v1/multihop")
+        return w.chain ?? []
+    }
+
+    func setMultiHopChain(_ chain: [String]) async throws -> [String] {
+        let payload = try JSONEncoder().encode(["chain": chain])
+        let data = try await send(path: "/v1/multihop", method: "PUT", body: payload, authorized: true)
+        return (try JSONDecoder().decode(ChainWrapper.self, from: data)).chain ?? []
+    }
+
+    func clearMultiHopChain() async throws {
+        _ = try await send(path: "/v1/multihop", method: "DELETE", body: nil, authorized: true)
+    }
+
+    /// Revokes every device, session, and allocation tied to this account's
+    /// current identity. The caller's access token stays valid so the app can
+    /// immediately re-provision a fresh one.
+    func panicWipe() async throws {
+        _ = try await send(path: "/v1/account/panic-wipe", method: "POST", body: Data("{}".utf8), authorized: true)
+    }
+
+    /// Development-only tier switch (ghostd must run with
+    /// GHOST_ALLOW_TIER_OVERRIDE=1). Replaced by a payment flow.
+    func setTier(_ tier: AccountTier) async throws {
+        let payload = try JSONEncoder().encode(["tier": tier.rawValue])
+        _ = try await send(path: "/v1/account/tier", method: "POST", body: payload, authorized: true)
+    }
+
     // MARK: Plumbing
 
     private func get<T: Decodable>(_ path: String) async throws -> T {
@@ -104,7 +173,11 @@ actor APIClient {
         guard (200..<300).contains(status) else {
             struct ErrBody: Codable { let error: String }
             let message = (try? JSONDecoder().decode(ErrBody.self, from: data))?.error ?? "Request failed (\(status))"
-            throw status == 401 ? APIError.unauthorized : APIError.http(status, message)
+            switch status {
+            case 401: throw APIError.unauthorized
+            case 402: throw APIError.upgradeRequired(message)
+            default: throw APIError.http(status, message)
+            }
         }
         return data
     }

@@ -6,8 +6,12 @@ import SwiftUI
 struct ServerConfigView: View {
     @EnvironmentObject var app: AppState
     @Environment(\.dismiss) private var dismiss
-    @State private var multiHopEnabled = false
+    @State private var showChainBuilder = false
     @State private var excludedApps: Set<String> = []
+
+    private var chainServers: [VPNServer] {
+        app.multiHopChain.compactMap { id in app.servers.first(where: { $0.id == id }) }
+    }
 
     // Per-app split tunneling on iOS is constrained by NetworkExtension —
     // real enforcement uses includedApps rules in the tunnel provider. This
@@ -80,27 +84,73 @@ struct ServerConfigView: View {
                         }
                     }
 
-                    // Multi-hop
+                    // Multi-hop chain (Ghost Plus)
                     VStack(alignment: .leading, spacing: 10) {
-                        HStack {
-                            StatLabel(text: "MULTI-HOP")
+                        HStack(spacing: 8) {
+                            StatLabel(text: "MULTI-HOP CHAIN")
+                            PlusBadge()
                             Spacer()
-                            Toggle("", isOn: $multiHopEnabled)
-                                .labelsHidden()
-                                .tint(Theme.accent)
-                        }
-                        if multiHopEnabled {
-                            HStack(spacing: 10) {
-                                hopCard(label: "ENTRY", server: app.servers.first)
-                                Image(systemName: "chevron.right")
-                                    .font(.system(size: 13, weight: .semibold))
-                                    .foregroundStyle(Theme.textMuted)
-                                hopCard(label: "EXIT", server: app.selectedServer)
+                            if !app.multiHopChain.isEmpty {
+                                Button("Clear") {
+                                    Task { await app.clearMultiHopChain() }
+                                }
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(Theme.danger)
                             }
-                            Text("No single server sees both who you are and where you're going.")
-                                .font(.caption)
-                                .foregroundStyle(Theme.textMuted)
                         }
+
+                        Button {
+                            if app.isPaid {
+                                showChainBuilder = true
+                            } else {
+                                app.upgradePrompt = "Custom multi-hop chains are part of Ghost Plus."
+                            }
+                        } label: {
+                            Card {
+                                if app.multiHopChain.isEmpty {
+                                    HStack {
+                                        VStack(alignment: .leading, spacing: 4) {
+                                            Text("Build a chain")
+                                                .font(.system(size: 14, weight: .semibold))
+                                                .foregroundStyle(Theme.textPrimary)
+                                            Text("Route through 2–3 locations you pick.")
+                                                .font(.caption)
+                                                .foregroundStyle(Theme.textMuted)
+                                        }
+                                        Spacer()
+                                        Image(systemName: app.isPaid ? "chevron.right" : "lock.fill")
+                                            .font(.system(size: 14, weight: .semibold))
+                                            .foregroundStyle(Theme.textMuted)
+                                    }
+                                } else {
+                                    VStack(alignment: .leading, spacing: 8) {
+                                        HStack(spacing: 6) {
+                                            ForEach(Array(chainServers.enumerated()), id: \.offset) { index, server in
+                                                if index > 0 {
+                                                    Image(systemName: "arrow.right")
+                                                        .font(.system(size: 10, weight: .bold))
+                                                        .foregroundStyle(Theme.textMuted)
+                                                }
+                                                HStack(spacing: 4) {
+                                                    Text(server.flagEmoji).font(.system(size: 14))
+                                                    Text(server.city)
+                                                        .font(.system(size: 12, weight: .semibold))
+                                                        .foregroundStyle(Theme.textPrimary)
+                                                }
+                                            }
+                                            Spacer()
+                                            Image(systemName: "chevron.right")
+                                                .font(.system(size: 12, weight: .semibold))
+                                                .foregroundStyle(Theme.textMuted)
+                                        }
+                                        Text("No single hop sees both who you are and where you're going.")
+                                            .font(.caption)
+                                            .foregroundStyle(Theme.textMuted)
+                                    }
+                                }
+                            }
+                        }
+                        .buttonStyle(.plain)
                     }
 
                     // Obfuscation
@@ -126,7 +176,11 @@ struct ServerConfigView: View {
                         StatLabel(text: "SERVERS")
                         ForEach(app.servers) { server in
                             Button {
-                                app.selectedServer = server
+                                if server.locked {
+                                    app.upgradePrompt = "\(server.city) is a priority location, part of Ghost Plus."
+                                } else {
+                                    app.selectedServer = server
+                                }
                             } label: {
                                 Card(padding: 12) {
                                     HStack(spacing: 12) {
@@ -134,7 +188,7 @@ struct ServerConfigView: View {
                                         VStack(alignment: .leading, spacing: 3) {
                                             Text("\(server.city) — \(server.id)")
                                                 .font(.system(size: 13, weight: .semibold))
-                                                .foregroundStyle(Theme.textPrimary)
+                                                .foregroundStyle(server.locked ? Theme.textSecondary : Theme.textPrimary)
                                             if server.audited {
                                                 Label("Audited", systemImage: "checkmark.shield.fill")
                                                     .font(.system(size: 10))
@@ -142,15 +196,11 @@ struct ServerConfigView: View {
                                             }
                                         }
                                         Spacer()
-                                        VStack(alignment: .trailing, spacing: 3) {
-                                            Text("\(server.loadPct)% load")
-                                                .font(.caption.weight(.bold))
-                                                .foregroundStyle(loadColor(server.loadPct))
-                                            if server.id == app.selectedServer?.id {
-                                                Image(systemName: "checkmark")
-                                                    .font(.system(size: 11, weight: .bold))
-                                                    .foregroundStyle(Theme.accent)
-                                            }
+                                        ServerRowDetail(server: server)
+                                        if server.id == app.selectedServer?.id {
+                                            Image(systemName: "checkmark")
+                                                .font(.system(size: 11, weight: .bold))
+                                                .foregroundStyle(Theme.accent)
                                         }
                                     }
                                 }
@@ -172,27 +222,8 @@ struct ServerConfigView: View {
             }
         }
         .preferredColorScheme(.dark)
-    }
-
-    private func hopCard(label: String, server: VPNServer?) -> some View {
-        Card(padding: 12) {
-            VStack(alignment: .leading, spacing: 6) {
-                StatLabel(text: label)
-                HStack(spacing: 8) {
-                    Text(server?.flagEmoji ?? "🌐").font(.system(size: 16))
-                    Text(server?.country ?? "—")
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(Theme.textPrimary)
-                }
-            }
-        }
-    }
-
-    private func loadColor(_ pct: Int) -> Color {
-        switch pct {
-        case ..<40: Theme.accent
-        case ..<70: Theme.warning
-        default: Theme.danger
+        .sheet(isPresented: $showChainBuilder) {
+            MultiHopBuilderView()
         }
     }
 }

@@ -26,6 +26,15 @@ The app runs fully against the local backend (auth, devices, servers) with a
 simulated tunnel; `ios/README.md` covers enabling the real WireGuard tunnel
 (Apple Network Extension entitlement + a live server).
 
+## Tiers
+
+| Free | Ghost Plus |
+|---|---|
+| Dedicated static IP · DNS threat & ad blocking · full Simple/Advanced app | Priority low-load server pool · Panic wipe · Custom multi-hop chain builder |
+
+Billing isn't built yet — run ghostd with `GHOST_ALLOW_TIER_OVERRIDE=1` to
+exercise paid features. See [docs/vpn-premium-features.md](docs/vpn-premium-features.md).
+
 ## Design principles (from `docs/`)
 
 - **No-logs by construction** — the backend schema cannot record connection

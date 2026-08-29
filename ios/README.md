@@ -33,13 +33,30 @@ ios/
 4. Set your team: uncomment `DEVELOPMENT_TEAM` in `project.yml` (or pick a
    team in Xcode's Signing & Capabilities) and regenerate.
 5. Run the backend on the same Mac:
-   `cd backend && GHOST_SEED_DEV=1 go run ./cmd/ghostd`
+   `cd backend && GHOST_SEED_DEV=1 GHOST_ALLOW_TIER_OVERRIDE=1 go run ./cmd/ghostd`
+   (the tier override lets the in-app **Upgrade to Plus** button work
+   before billing exists)
 6. Build & run the **Ghost** scheme in the iOS Simulator. The simulator
    reaches ghostd at `http://localhost:8080` (see `APIClient.defaultBaseURL`).
 
 Out of the box the app runs in **demo tunnel mode**: the full UI, auth,
 device registration, and server catalog are real; the tunnel connection is
 simulated (`DemoTunnelController`).
+
+## Tier features in the app
+
+| Feature | Tier | Where |
+|---|---|---|
+| Dedicated static IP | Free | Settings → Dedicated IP (claim by location, release); shown on the Advanced dashboard |
+| DNS threat & ad blocking | Free | Settings → Threat Protection; state on the Advanced dashboard |
+| Priority server pool | Plus | Every server list — locked entries show a **PLUS** chip and open the upgrade sheet instead of connecting |
+| Panic wipe | Plus | Settings → Panic Wipe (two-step confirm, then re-provisions a new identity) |
+| Custom multi-hop chain | Plus | Advanced → Server & Protocol → Multi-Hop Chain (`MultiHopBuilderView`) |
+
+A 402 from the backend becomes `APIError.upgradeRequired`, which `AppState`
+routes to the upgrade sheet rather than the error alert — a paid-feature
+refusal should never read as a failure. `UpgradeSheet`'s button currently
+calls the dev tier endpoint; replace it with the StoreKit purchase flow.
 
 ## Turning on the real tunnel
 

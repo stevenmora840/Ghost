@@ -19,9 +19,19 @@ type serverJSON struct {
 	PublicKey   string `json:"public_key"`
 	LoadPct     int    `json:"load_pct"`
 	Audited     bool   `json:"audited"`
+	Priority    bool   `json:"priority"`
+	// Locked marks a priority server the caller's tier can't use. Locked
+	// servers are still listed — the client shows them so the upgrade is
+	// legible — but with their tunnel credentials withheld.
+	Locked bool `json:"locked"`
 }
 
 func (s *Server) handleListServers(w http.ResponseWriter, r *http.Request) {
+	u, err := s.Store.UserByID(r.Context(), userID(r))
+	if err != nil {
+		writeErr(w, http.StatusUnauthorized, "account not found")
+		return
+	}
 	servers, err := s.Store.Servers(r.Context())
 	if err != nil {
 		s.Log.Error("list servers", "err", err)
@@ -30,11 +40,21 @@ func (s *Server) handleListServers(w http.ResponseWriter, r *http.Request) {
 	}
 	out := make([]serverJSON, 0, len(servers))
 	for _, sv := range servers {
-		out = append(out, serverJSON{
+		locked := sv.Priority && !u.Tier.IsPaid()
+		j := serverJSON{
 			ID: sv.ID, City: sv.City, Country: sv.Country,
-			CountryCode: sv.CountryCode, Endpoint: sv.Endpoint, PublicKey: sv.PublicKey,
-			LoadPct: sv.LoadPct, Audited: sv.Audited,
-		})
+			CountryCode: sv.CountryCode, LoadPct: sv.LoadPct,
+			Audited: sv.Audited, Priority: sv.Priority, Locked: locked,
+		}
+		// Withholding endpoint and key is what actually gates the pool at
+		// this layer — a locked entry can't be turned into a tunnel config.
+		// PoP-side peer authorization is the second half of this, and lands
+		// with the PoP agent.
+		if !locked {
+			j.Endpoint = sv.Endpoint
+			j.PublicKey = sv.PublicKey
+		}
+		out = append(out, j)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"servers": out})
 }
@@ -53,11 +73,28 @@ func (s *Server) handleAccount(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, "internal error")
 		return
 	}
+
+	var dedicated any
+	if d, err := s.Store.DedicatedIPForUser(r.Context(), u.ID); err == nil {
+		dedicated = dedicatedIPJSON{IP: d.IP, ServerID: d.ServerID}
+	} else if !errors.Is(err, store.ErrNotFound) {
+		s.Log.Error("get dedicated ip", "err", err)
+	}
+
+	chain, err := s.Store.MultiHopChain(r.Context(), u.ID)
+	if err != nil {
+		s.Log.Error("get multihop chain", "err", err)
+	}
+
 	writeJSON(w, http.StatusOK, map[string]any{
-		"id":           u.ID,
-		"email":        u.Email.String,
-		"device_count": len(devices),
-		"device_limit": store.MaxDevicesPerUser,
+		"id":             u.ID,
+		"email":          u.Email.String,
+		"tier":           string(u.Tier),
+		"device_count":   len(devices),
+		"device_limit":   store.MaxDevicesPerUser,
+		"dns_filter":     dnsFilterResponse(u.DNSFilter),
+		"dedicated_ip":   dedicated,
+		"multihop_chain": chain,
 	})
 }
 
@@ -102,6 +139,11 @@ func (s *Server) handleCreateDevice(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	u, err := s.Store.UserByID(r.Context(), userID(r))
+	if err != nil {
+		writeErr(w, http.StatusUnauthorized, "account not found")
+		return
+	}
 	d, err := s.Store.CreateDevice(r.Context(), userID(r), req.Name, req.PublicKey)
 	switch {
 	case errors.Is(err, store.ErrDeviceLimit):
@@ -115,9 +157,11 @@ func (s *Server) handleCreateDevice(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, "internal error")
 		return
 	}
+	// DNS follows the account's blocking preferences, so filtering applies
+	// from the first tunnel bring-up without a second round trip.
 	writeJSON(w, http.StatusCreated, map[string]any{
 		"device":      deviceJSON{ID: d.ID, Name: d.Name, PublicKey: d.PublicKey, AssignedIP: d.AssignedIP},
-		"dns":         wg.DefaultDNS,
+		"dns":         wg.ResolverFor(u.DNSFilter.BlockAds, u.DNSFilter.BlockMalware, u.DNSFilter.BlockTrackers),
 		"allowed_ips": wg.DefaultAllowedIPs,
 	})
 }

@@ -21,6 +21,9 @@ type Server struct {
 	Tokens *auth.Tokens
 	Apple  *auth.AppleVerifier
 	Log    *slog.Logger
+	// AllowTierOverride exposes POST /v1/account/tier for development, so
+	// paid features can be exercised before billing exists.
+	AllowTierOverride bool
 }
 
 func (s *Server) Handler() http.Handler {
@@ -37,6 +40,21 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /v1/devices", s.requireAuth(s.handleListDevices))
 	mux.HandleFunc("POST /v1/devices", s.requireAuth(s.handleCreateDevice))
 	mux.HandleFunc("DELETE /v1/devices/{id}", s.requireAuth(s.handleDeleteDevice))
+
+	// Free tier.
+	mux.HandleFunc("GET /v1/dns-filter", s.requireAuth(s.handleGetDNSFilter))
+	mux.HandleFunc("PUT /v1/dns-filter", s.requireAuth(s.handleSetDNSFilter))
+	mux.HandleFunc("GET /v1/dedicated-ip", s.requireAuth(s.handleGetDedicatedIP))
+	mux.HandleFunc("POST /v1/dedicated-ip", s.requireAuth(s.handleAllocateDedicatedIP))
+	mux.HandleFunc("DELETE /v1/dedicated-ip", s.requireAuth(s.handleReleaseDedicatedIP))
+
+	// Paid tier.
+	mux.HandleFunc("GET /v1/multihop", s.requireAuth(s.requirePaid(s.handleGetMultiHop)))
+	mux.HandleFunc("PUT /v1/multihop", s.requireAuth(s.requirePaid(s.handleSetMultiHop)))
+	mux.HandleFunc("DELETE /v1/multihop", s.requireAuth(s.requirePaid(s.handleClearMultiHop)))
+	mux.HandleFunc("POST /v1/account/panic-wipe", s.requireAuth(s.requirePaid(s.handlePanicWipe)))
+
+	mux.HandleFunc("POST /v1/account/tier", s.requireAuth(s.handleSetTier))
 	return mux
 }
 

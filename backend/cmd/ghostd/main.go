@@ -15,6 +15,7 @@ package main
 import (
 	"context"
 	"crypto/rand"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
@@ -59,10 +60,14 @@ func main() {
 	}
 
 	srv := &api.Server{
-		Store:  st,
-		Tokens: auth.NewTokens(secret),
-		Apple:  auth.NewAppleVerifier(bundleID),
-		Log:    log,
+		Store:             st,
+		Tokens:            auth.NewTokens(secret),
+		Apple:             auth.NewAppleVerifier(bundleID),
+		Log:               log,
+		AllowTierOverride: os.Getenv("GHOST_ALLOW_TIER_OVERRIDE") == "1",
+	}
+	if srv.AllowTierOverride {
+		log.Warn("GHOST_ALLOW_TIER_OVERRIDE=1 — POST /v1/account/tier can change tiers without payment")
 	}
 
 	httpSrv := &http.Server{
@@ -83,12 +88,17 @@ func seedDevServers(st *store.Store) error {
 	seeds := []struct {
 		id, city, country, code, endpoint string
 		load                              int
+		priority                          bool
 	}{
-		{"us-nyc-1", "New York", "United States", "US", "nyc1.dev.ghostvpn.example:51820", 23},
-		{"uk-lon-1", "London", "United Kingdom", "GB", "lon1.dev.ghostvpn.example:51820", 31},
-		{"de-fra-1", "Frankfurt", "Germany", "DE", "fra1.dev.ghostvpn.example:51820", 23},
-		{"nl-ams-1", "Amsterdam", "Netherlands", "NL", "ams1.dev.ghostvpn.example:51820", 54},
-		{"jp-tyo-1", "Tokyo", "Japan", "JP", "tyo1.dev.ghostvpn.example:51820", 40},
+		{"us-nyc-1", "New York", "United States", "US", "nyc1.dev.ghostvpn.example:51820", 23, false},
+		{"uk-lon-1", "London", "United Kingdom", "GB", "lon1.dev.ghostvpn.example:51820", 31, false},
+		{"de-fra-1", "Frankfurt", "Germany", "DE", "fra1.dev.ghostvpn.example:51820", 23, false},
+		{"nl-ams-1", "Amsterdam", "Netherlands", "NL", "ams1.dev.ghostvpn.example:51820", 54, false},
+		{"jp-tyo-1", "Tokyo", "Japan", "JP", "tyo1.dev.ghostvpn.example:51820", 40, false},
+		// Priority pool: deliberately low-load, paid accounts only.
+		{"us-nyc-p1", "New York", "United States", "US", "nyc-p1.dev.ghostvpn.example:51820", 6, true},
+		{"de-fra-p1", "Frankfurt", "Germany", "DE", "fra-p1.dev.ghostvpn.example:51820", 4, true},
+		{"sg-sin-p1", "Singapore", "Singapore", "SG", "sin-p1.dev.ghostvpn.example:51820", 9, true},
 	}
 	ctx := context.Background()
 	existing, err := st.Servers(ctx)
@@ -109,10 +119,21 @@ func seedDevServers(st *store.Store) error {
 		}
 		if err := st.UpsertServer(ctx, store.Server{
 			ID: s.id, City: s.city, Country: s.country, CountryCode: s.code,
-			Endpoint: s.endpoint, PublicKey: pub, LoadPct: s.load, Audited: true,
+			Endpoint: s.endpoint, PublicKey: pub, LoadPct: s.load,
+			Audited: true, Priority: s.priority,
 		}); err != nil {
 			return err
 		}
+		// A small pool of dedicated exit addresses per location. Real PoPs
+		// get these from their actual allocated ranges.
+		octet := 100 + len(have)
+		for i := 1; i <= 4; i++ {
+			ip := fmt.Sprintf("198.51.%d.%d", octet, i)
+			if err := st.AddDedicatedIPToPool(ctx, ip, s.id); err != nil {
+				return err
+			}
+		}
+		have[s.id] = true
 	}
 	return nil
 }

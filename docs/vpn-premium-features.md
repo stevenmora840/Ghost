@@ -3,6 +3,34 @@
 What's actually worth charging for on top of the v1 app, and what to skip.
 Builds on the P2/P3 tiers in `vpn-features-priorities.md`.
 
+## Shipped
+
+Five of the recommendations below are built, across `backend/` and `ios/`.
+The tier split departs from the original recommendation: dedicated IP and
+DNS blocking ship **free** as acquisition features, with the pool, wipe and
+chain builder behind Ghost Plus.
+
+| Feature | Tier | Status |
+|---|---|---|
+| Dedicated static IP | **Free** | Claim/release per location; one address per account |
+| DNS threat & ad blocking | **Free** | Per-account preferences → filtering resolver in the tunnel config |
+| Priority low-load server pool | **Plus** | Locked servers listed but stripped of tunnel credentials |
+| Panic wipe | **Plus** | Revokes keys, devices, sessions, allocations; re-provisions a new identity |
+| Custom multi-hop chain builder | **Plus** | 2–3 hops, user-ordered |
+
+Billing is not built: `store.SetTier` is the seam a payment webhook will
+call, and a dev-only endpoint flips tiers meanwhile. Post-quantum
+encryption remains unshipped and, per the reasoning below, should land free
+rather than paywalled.
+
+**Cost note on making dedicated IPs free:** IPv4 addresses are a real
+per-address monthly cost (`vpn-cost-minimization.md` puts leasing at
+~$0.30–0.50/IP/month and rising), and this is the one free-tier feature
+with a hard marginal cost per user. It's mitigated by claiming being
+opt-in rather than automatic, and by released addresses returning to the
+pool — but the pool size per location is the lever to watch if free signups
+scale faster than conversions.
+
 ## What competitors charge extra for (2026)
 
 - **NordVPN**: post-quantum encryption (now free/standard across all apps),

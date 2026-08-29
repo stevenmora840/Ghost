@@ -20,6 +20,14 @@ struct RootView: View {
         } message: {
             Text(app.errorMessage ?? "")
         }
+        // A paid-feature refusal opens the upgrade sheet rather than an
+        // error alert — it isn't a failure.
+        .sheet(isPresented: Binding(
+            get: { app.upgradePrompt != nil },
+            set: { if !$0 { app.upgradePrompt = nil } }
+        )) {
+            UpgradeSheet(message: app.upgradePrompt ?? "")
+        }
     }
 }
 
@@ -119,6 +127,10 @@ struct LocationsListBody: View {
     var body: some View {
         List(filtered) { server in
             Button {
+                guard !server.locked else {
+                    app.upgradePrompt = "\(server.city) is a priority location, part of Ghost Plus."
+                    return
+                }
                 app.selectedServer = server
                 if app.connection.isConnected {
                     Task {
@@ -132,12 +144,15 @@ struct LocationsListBody: View {
                     VStack(alignment: .leading, spacing: 2) {
                         Text(server.country)
                             .font(.system(size: 15, weight: .semibold))
-                            .foregroundStyle(Theme.textPrimary)
+                            .foregroundStyle(server.locked ? Theme.textSecondary : Theme.textPrimary)
                         Text(server.city)
                             .font(.caption)
                             .foregroundStyle(Theme.textMuted)
                     }
                     Spacer()
+                    // Simple mode keeps load numbers out of the way; the
+                    // Plus lock still shows so the pool is discoverable.
+                    ServerRowDetail(server: server, showsLoad: app.mode == .advanced)
                     if server.id == app.selectedServer?.id {
                         Image(systemName: "checkmark")
                             .font(.system(size: 14, weight: .bold))

@@ -81,6 +81,35 @@ struct AdvancedDashboardView: View {
                     }
                 }
 
+                LazyVGrid(columns: columns, spacing: 12) {
+                    Card {
+                        VStack(alignment: .leading, spacing: 8) {
+                            StatLabel(text: "THREAT PROTECTION")
+                            HStack(spacing: 6) {
+                                Image(systemName: app.dnsFilter.isAnyEnabled ? "shield.lefthalf.filled" : "shield.slash")
+                                    .font(.system(size: 13))
+                                    .foregroundStyle(app.dnsFilter.isAnyEnabled ? Theme.accent : Theme.textMuted)
+                                Text(app.dnsFilter.summary)
+                                    .font(.system(size: 13, weight: .bold, design: .rounded))
+                                    .foregroundStyle(Theme.textPrimary)
+                                    .lineLimit(1)
+                                    .minimumScaleFactor(0.8)
+                            }
+                        }
+                    }
+
+                    Card {
+                        VStack(alignment: .leading, spacing: 8) {
+                            StatLabel(text: "DEDICATED IP")
+                            Text(app.dedicatedIP?.ip ?? "None")
+                                .font(.system(size: 13, weight: .bold, design: app.dedicatedIP == nil ? .rounded : .monospaced))
+                                .foregroundStyle(app.dedicatedIP == nil ? Theme.textMuted : Theme.textPrimary)
+                                .lineLimit(1)
+                                .minimumScaleFactor(0.7)
+                        }
+                    }
+                }
+
                 Card {
                     VStack(alignment: .leading, spacing: 10) {
                         StatLabel(text: "DATA USAGE THIS SESSION")

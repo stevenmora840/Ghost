@@ -20,6 +20,12 @@ struct LocationsView: View {
             List {
                 ForEach(filtered) { server in
                     Button {
+                        // A locked priority location offers the upgrade
+                        // instead of failing to connect.
+                        guard !server.locked else {
+                            app.upgradePrompt = "\(server.city) is a priority location, part of Ghost Plus."
+                            return
+                        }
                         app.selectedServer = server
                         dismiss()
                         // Selecting while connected re-tunnels to the new exit.
@@ -35,25 +41,16 @@ struct LocationsView: View {
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(server.country)
                                     .font(.system(size: 15, weight: .semibold))
-                                    .foregroundStyle(Theme.textPrimary)
+                                    .foregroundStyle(server.locked ? Theme.textSecondary : Theme.textPrimary)
                                 Text(server.city)
                                     .font(.caption)
                                     .foregroundStyle(Theme.textMuted)
                             }
                             Spacer()
 
-                            if app.mode == .advanced {
-                                VStack(alignment: .trailing, spacing: 2) {
-                                    Text("\(server.loadPct)% load")
-                                        .font(.caption.weight(.bold))
-                                        .foregroundStyle(loadColor(server.loadPct))
-                                    if server.audited {
-                                        Label("Audited", systemImage: "checkmark.shield.fill")
-                                            .font(.system(size: 10))
-                                            .foregroundStyle(Theme.textMuted)
-                                    }
-                                }
-                            } else if server.id == app.servers.first?.id {
+                            if app.mode == .advanced || server.locked || server.priority {
+                                ServerRowDetail(server: server, showsLoad: app.mode == .advanced)
+                            } else if server.id == app.usableServers.first?.id {
                                 Text("FASTEST")
                                     .font(.system(size: 10, weight: .bold))
                                     .padding(.horizontal, 10)
@@ -90,13 +87,5 @@ struct LocationsView: View {
             .refreshable { try? await app.refreshServers() }
         }
         .preferredColorScheme(.dark)
-    }
-
-    private func loadColor(_ pct: Int) -> Color {
-        switch pct {
-        case ..<40: Theme.accent
-        case ..<70: Theme.warning
-        default: Theme.danger
-        }
     }
 }

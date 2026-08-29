@@ -22,6 +22,19 @@ final class AppState: ObservableObject {
     @Published var stats = TunnelStats()
     @Published var account: Account?
     @Published var errorMessage: String?
+    /// Set when a paid-only action was attempted; drives the upgrade sheet.
+    @Published var upgradePrompt: String?
+
+    // Tier features.
+    @Published var dnsFilter: DNSFilter = .off
+    @Published var dedicatedIP: DedicatedIP?
+    @Published var multiHopChain: [String] = []
+
+    var tier: AccountTier { account?.tier ?? .free }
+    var isPaid: Bool { tier.isPaid }
+
+    /// Servers this account can actually connect to.
+    var usableServers: [VPNServer] { servers.filter { !$0.locked } }
 
     // Advanced-mode settings. v1 surfaces the controls; obfuscation and
     // multi-hop are UI + config plumbing ahead of PoP support.
@@ -73,7 +86,7 @@ final class AppState: ObservableObject {
                 UserDefaults.standard.set(reg.allowedIPs, forKey: "tunnelAllowedIPs")
             }
             try await refreshServers()
-            account = try? await api.account()
+            await refreshAccount()
         } catch let err as APIError {
             if case .unauthorized = err {
                 await signOut()
@@ -91,8 +104,145 @@ final class AppState: ObservableObject {
 
     func refreshServers() async throws {
         servers = try await api.servers()
+        // Never leave a locked server selected — it carries no tunnel
+        // credentials, so connecting would fail.
+        if let current = selectedServer,
+           let updated = servers.first(where: { $0.id == current.id }) {
+            selectedServer = updated.locked ? usableServers.first : updated
+        }
         if selectedServer == nil {
-            selectedServer = servers.first // list is load-sorted: first ≈ best
+            selectedServer = usableServers.first // load-sorted: first ≈ best
+        }
+    }
+
+    /// Reloads the account and the tier-feature state it carries.
+    func refreshAccount() async {
+        guard let account = try? await api.account() else { return }
+        self.account = account
+        dnsFilter = account.dnsFilter
+        dedicatedIP = account.dedicatedIP
+        multiHopChain = account.multiHopChain ?? []
+    }
+
+    // MARK: Free tier — DNS threat & ad blocking
+
+    /// Applies new blocking preferences. The response carries the resolver
+    /// set, so the stored tunnel config updates without re-registering the
+    /// device (which would consume a fresh tunnel address each toggle). A
+    /// live tunnel is cycled so the change takes effect immediately.
+    func updateDNSFilter(ads: Bool, malware: Bool, trackers: Bool) async {
+        let previous = dnsFilter
+        do {
+            let updated = try await api.setDNSFilter(ads: ads, malware: malware, trackers: trackers)
+            dnsFilter = updated
+            UserDefaults.standard.set(updated.resolvers, forKey: "tunnelDNS")
+            if connection.isConnected {
+                await disconnect()
+                await connect()
+            }
+        } catch {
+            dnsFilter = previous
+            handle(error)
+        }
+    }
+
+    // MARK: Free tier — dedicated static IP
+
+    func allocateDedicatedIP(serverID: String) async {
+        do {
+            dedicatedIP = try await api.allocateDedicatedIP(serverID: serverID)
+        } catch {
+            handle(error)
+        }
+    }
+
+    func releaseDedicatedIP() async {
+        do {
+            try await api.releaseDedicatedIP()
+            dedicatedIP = nil
+        } catch {
+            handle(error)
+        }
+    }
+
+    // MARK: Paid tier — custom multi-hop chain
+
+    func saveMultiHopChain(_ chain: [String]) async {
+        do {
+            multiHopChain = try await api.setMultiHopChain(chain)
+        } catch {
+            handle(error)
+        }
+    }
+
+    func clearMultiHopChain() async {
+        do {
+            try await api.clearMultiHopChain()
+            multiHopChain = []
+        } catch {
+            handle(error)
+        }
+    }
+
+    // MARK: Paid tier — panic wipe
+
+    /// Drops the tunnel, wipes the on-device key, revokes everything
+    /// server-side, then provisions a brand-new identity. The account and
+    /// sign-in survive; the keys, tunnel address, and allocations do not.
+    func panicWipe() async {
+        await disconnect()
+        do {
+            try await api.panicWipe()
+        } catch {
+            handle(error)
+            return
+        }
+
+        // Local identity goes even if the server call already succeeded.
+        KeychainStore.delete(.wireGuardPrivateKey)
+        KeychainStore.delete(.deviceID)
+        UserDefaults.standard.removeObject(forKey: "assignedIP")
+        UserDefaults.standard.removeObject(forKey: "tunnelDNS")
+        UserDefaults.standard.removeObject(forKey: "tunnelAllowedIPs")
+        dedicatedIP = nil
+        multiHopChain = []
+        tunnel = nil
+
+        // Fresh keypair + registration: a new tunnel address, unlinkable to
+        // the old one.
+        do {
+            let publicKey = WireGuardKeys.ensureKeypair()
+            let reg = try await api.registerDevice(name: UIDevice.current.name, publicKey: publicKey)
+            KeychainStore.set(reg.device.id, for: .deviceID)
+            UserDefaults.standard.set(reg.device.assignedIP, forKey: "assignedIP")
+            UserDefaults.standard.set(reg.dns, forKey: "tunnelDNS")
+            UserDefaults.standard.set(reg.allowedIPs, forKey: "tunnelAllowedIPs")
+            await refreshAccount()
+        } catch {
+            handle(error)
+        }
+    }
+
+    // MARK: Tier
+
+    /// Development-only upgrade path until billing exists.
+    func setTier(_ tier: AccountTier) async {
+        do {
+            try await api.setTier(tier)
+            await refreshAccount()
+            try await refreshServers()
+        } catch {
+            handle(error)
+        }
+    }
+
+    /// Routes a 402 to the upgrade sheet and everything else to the error
+    /// alert, so paid-feature refusals never read as failures.
+    private func handle(_ error: Error) {
+        if case let APIError.upgradeRequired(message) = error {
+            upgradePrompt = message
+        } else {
+            errorMessage = error.localizedDescription
         }
     }
 
@@ -109,6 +259,10 @@ final class AppState: ObservableObject {
     func connect() async {
         guard let server = selectedServer else {
             errorMessage = "Pick a location first."
+            return
+        }
+        guard !server.locked else {
+            upgradePrompt = "\(server.city) is a priority location, part of Ghost Plus."
             return
         }
         guard let privateKey = WireGuardKeys.privateKeyBase64,

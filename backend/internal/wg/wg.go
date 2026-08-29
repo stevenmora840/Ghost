@@ -57,6 +57,35 @@ type PeerConfig struct {
 // docs/vpn-infrastructure.md: VPN-operated DNS so queries never leak).
 var DefaultDNS = []string{"10.64.0.1"}
 
+// Filtering resolvers. Each address is a Ghost resolver running a different
+// blocklist set; the client is handed the address matching its preferences,
+// so filtering costs one config field rather than any query logging.
+const (
+	ResolverPlain      = "10.64.0.1" // no filtering
+	ResolverMalware    = "10.64.0.2" // malware/phishing
+	ResolverAds        = "10.64.0.3" // ads + malware
+	ResolverTrackers   = "10.64.0.4" // trackers + malware
+	ResolverEverything = "10.64.0.5" // ads + trackers + malware
+)
+
+// ResolverFor maps blocking preferences to the resolver that serves them.
+// Malware blocking is implied by any other category — there is no resolver
+// that blocks ads while resolving known-malicious domains.
+func ResolverFor(blockAds, blockMalware, blockTrackers bool) []string {
+	switch {
+	case blockAds && blockTrackers:
+		return []string{ResolverEverything}
+	case blockAds:
+		return []string{ResolverAds}
+	case blockTrackers:
+		return []string{ResolverTrackers}
+	case blockMalware:
+		return []string{ResolverMalware}
+	default:
+		return []string{ResolverPlain}
+	}
+}
+
 // DefaultAllowedIPs routes all traffic through the tunnel; the client's kill
 // switch and IPv6 blocking build on this.
 var DefaultAllowedIPs = []string{"0.0.0.0/0", "::/0"}

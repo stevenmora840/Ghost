@@ -30,10 +30,11 @@ func newTestServer(t *testing.T) (*Server, *httptest.Server) {
 	t.Cleanup(func() { st.Close() })
 
 	srv := &Server{
-		Store:  st,
-		Tokens: auth.NewTokens([]byte("test-secret")),
-		Apple:  auth.NewAppleVerifier("com.ghostvpn.ios"),
-		Log:    slog.New(slog.DiscardHandler),
+		Store:             st,
+		Tokens:            auth.NewTokens([]byte("test-secret")),
+		Apple:             auth.NewAppleVerifier("com.ghostvpn.ios"),
+		Log:               slog.New(slog.DiscardHandler),
+		AllowTierOverride: true, // tests exercise paid features without billing
 	}
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(ts.Close)
